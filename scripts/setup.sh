@@ -5,8 +5,11 @@
 # Usage (on the server):
 #   curl -fsSL https://raw.githubusercontent.com/yigitkonur/agent-browser-remote/main/scripts/setup.sh | bash
 #
-# Or with options:
-#   curl -fsSL ... | INSTALL_DIR=/opt/agent-browser PORT=3000 bash
+# Or with sudo (required when INSTALL_DIR is under /opt or another root-owned path):
+#   curl -fsSL ... | sudo bash
+#
+# With custom options:
+#   curl -fsSL ... | INSTALL_DIR=/opt/agent-browser PORT=3000 sudo bash
 #
 # What it does:
 #   1. Checks Docker is installed
@@ -21,6 +24,9 @@ set -euo pipefail
 INSTALL_DIR="${INSTALL_DIR:-/opt/agent-browser}"
 PORT="${PORT:-3000}"
 IMAGE="ghcr.io/yigitkonur/agent-browser-remote:latest"
+
+# Detect the real user when running under sudo
+REAL_USER="${SUDO_USER:-$(whoami)}"
 
 # ---------- Helpers ----------
 info()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
@@ -45,6 +51,13 @@ fi
 # ---------- Create directory ----------
 info "Creating $INSTALL_DIR..."
 mkdir -p "$INSTALL_DIR"
+
+# If running as root (via sudo), chown the directory to the real user
+# so they can edit .env and docker-compose.yml without sudo later
+if [ "$(id -u)" = "0" ] && [ "$REAL_USER" != "root" ]; then
+  chown "$REAL_USER" "$INSTALL_DIR"
+fi
+
 cd "$INSTALL_DIR"
 
 # ---------- Generate .env ----------
@@ -58,6 +71,12 @@ API_TOKEN=$API_TOKEN
 MAX_SESSIONS=10
 STATE_EXPIRE_DAYS=30
 ENV
+
+  # Make .env owned by the real user
+  if [ "$(id -u)" = "0" ] && [ "$REAL_USER" != "root" ]; then
+    chown "$REAL_USER" .env
+  fi
+
   ok "API token generated: $API_TOKEN"
   echo "  (save this — you'll need it to connect)"
 fi
@@ -99,6 +118,11 @@ volumes:
   ab_data:
 COMPOSE
 
+# Make docker-compose.yml owned by the real user
+if [ "$(id -u)" = "0" ] && [ "$REAL_USER" != "root" ]; then
+  chown "$REAL_USER" docker-compose.yml
+fi
+
 # ---------- Pull and start ----------
 info "Pulling Docker image..."
 docker pull "$IMAGE"
@@ -114,7 +138,7 @@ echo "  Dir:   $INSTALL_DIR"
 echo "  Token: $(grep API_TOKEN .env | head -1 | cut -d= -f2)"
 echo ""
 echo "Connect from your machine:"
-echo "  ssh -N -L ${PORT}:localhost:${PORT} $(whoami)@$(hostname -f 2>/dev/null || hostname)"
+echo "  ssh -N -L ${PORT}:localhost:${PORT} user@your-server"
 echo ""
 echo "Test:"
 echo "  curl http://localhost:${PORT}/health"

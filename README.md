@@ -24,15 +24,17 @@ Local machine ──HTTP──> SSH tunnel ──> Docker container
 SSH into your server and run:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/yigitkonur/agent-browser-remote/main/scripts/setup.sh | bash
+curl -fsSL https://raw.githubusercontent.com/yigitkonur/agent-browser-remote/main/scripts/setup.sh | sudo bash
 ```
 
 Or with custom options:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/yigitkonur/agent-browser-remote/main/scripts/setup.sh | \
-  INSTALL_DIR=/opt/agent-browser PORT=3000 bash
+  INSTALL_DIR=/opt/agent-browser PORT=3000 sudo bash
 ```
+
+> **Note:** `sudo` is needed because the default install directory (`/opt/agent-browser`) requires root to create. The script automatically sets file ownership to your user so you can edit config without sudo later.
 
 The script will pull the image, generate an API token, and start the service.
 
@@ -83,6 +85,14 @@ ssh -N -L 3000:localhost:3000 user@your-server
 ```
 
 Now `http://localhost:3000` on your machine routes to the remote service.
+
+**Tip:** If port 3000 is already in use (e.g., by a dev server), pick a different local port:
+
+```bash
+ssh -N -L 4100:localhost:3000 user@your-server
+```
+
+Then set `AGENT_BROWSER_REMOTE_URL=http://localhost:4100` for the `ab-remote` CLI.
 
 **Tip:** Add to `~/.ssh/config` for convenience:
 
@@ -160,6 +170,7 @@ For a shell-friendly experience, use the included `ab-remote` script:
 ```bash
 # Add to your shell profile (~/.zshrc or ~/.bashrc)
 export AGENT_BROWSER_REMOTE_TOKEN="your-token-here"
+export AGENT_BROWSER_REMOTE_URL="http://localhost:3000"  # change port if using a custom tunnel
 export PATH="/path/to/agent-browser-remote/scripts:$PATH"
 
 # Use it
@@ -179,6 +190,7 @@ ab-remote --version
 ```powershell
 # Set token (or add to your PowerShell profile)
 $env:AGENT_BROWSER_REMOTE_TOKEN = "your-token-here"
+$env:AGENT_BROWSER_REMOTE_URL = "http://localhost:3000"  # change port if using a custom tunnel
 
 # Add scripts to PATH (optional)
 $env:PATH += ";C:\path\to\agent-browser-remote\scripts"

@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 \
     libxrandr2 libgbm1 libasound2 libpangocairo-1.0-0 libgtk-3-0 \
     libx11-6 libxext6 libxfixes3 libxcb1 \
-    fonts-liberation ca-certificates wget curl procps \
+    fonts-liberation ca-certificates wget curl procps tini \
     && rm -rf /var/lib/apt/lists/*
 
 # Install agent-browser globally
@@ -46,4 +46,5 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=20s \
     CMD wget -q --spider http://localhost:3000/health || exit 1
 
+ENTRYPOINT ["tini", "--"]
 CMD ["node", "dist/server.js"]
