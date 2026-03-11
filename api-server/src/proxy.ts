@@ -23,9 +23,9 @@ function getSessionEngine(sessionId: string): Engine {
     const e = fs
       .readFileSync(path.join(SOCKET_DIR, `${sessionId}.engine`), "utf8")
       .trim();
-    if (e === "lightpanda") return "lightpanda";
+    if (e === "chrome") return "chrome";
   } catch {}
-  return "chrome";
+  return "lightpanda";
 }
 
 /**

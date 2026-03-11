@@ -82,13 +82,13 @@ Examples:
   ab-remote task-1 screenshot
   ab-remote task-1 eval expression="document.title"
 
-  # Use Lightpanda (faster, lighter) instead of Chrome:
-  ab-remote task-1 navigate url=https://example.com --engine lightpanda
+  # Use Chrome instead of Lightpanda (default):
+  ab-remote task-1 navigate url=https://example.com --engine chrome
 
 Session management:
   ab-remote --sessions                          List active sessions
-  ab-remote --create <name>                     Create a Chrome session
-  ab-remote --create <name> --engine lightpanda Create a Lightpanda session
+  ab-remote --create <name>                     Create a Lightpanda session (default)
+  ab-remote --create <name> --engine chrome     Create a Chrome session
   ab-remote --stop <name>                       Stop and close a session
 
 Connection:
@@ -101,8 +101,8 @@ Other:
   ab-remote --help                  Show this help
 
 Engine selection:
-  --engine chrome       Use Chromium via Playwright (default, full fidelity)
-  --engine lightpanda   Use Lightpanda (10x faster, 10x less memory, headless only)
+  --engine lightpanda   Use Lightpanda (default, 10x faster, 10x less memory)
+  --engine chrome       Use Chromium via Playwright (full fidelity, screenshots, extensions)
 
   Engine is set when a session is first created. Subsequent commands to an
   existing session use whatever engine it was created with.
@@ -238,7 +238,7 @@ cmd_create() {
   local name="${1:?Usage: ab-remote --create <session-name> [--engine chrome|lightpanda]}"
   shift
 
-  local engine="chrome"
+  local engine="lightpanda"
 
   # Parse optional --engine
   while [ $# -gt 0 ]; do

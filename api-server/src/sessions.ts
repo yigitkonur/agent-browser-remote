@@ -61,13 +61,13 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
-/** Read persisted engine for a session, defaulting to "chrome". */
+/** Read persisted engine for a session, defaulting to "lightpanda". */
 function readEngine(id: string): Engine {
   try {
     const e = fs.readFileSync(enginePath(id), "utf8").trim();
-    if (e === "lightpanda") return "lightpanda";
+    if (e === "chrome") return "chrome";
   } catch {}
-  return "chrome";
+  return "lightpanda";
 }
 
 /** Check if a daemon is running for a session by reading its PID file. */
@@ -131,7 +131,7 @@ async function waitForFile(
 /** Ensure a daemon is running for the given session. Spawns one if not. */
 export async function ensureSession(
   id: string,
-  engine: Engine = "chrome"
+  engine: Engine = "lightpanda"
 ): Promise<void> {
   if (checkDaemonAlive(id)) return;
 

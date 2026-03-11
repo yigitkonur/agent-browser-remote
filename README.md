@@ -4,9 +4,9 @@ Run [agent-browser](https://github.com/vercel-labs/agent-browser) as a remote, m
 
 ```
 Local machine ──HTTP──> SSH tunnel ──> Docker container
-                                        ├── Session "task-1" → Chromium (default)
-                                        ├── Session "task-2" → Chromium
-                                        └── Session "task-3" → Lightpanda (fast)
+                                        ├── Session "task-1" → Lightpanda (default)
+                                        ├── Session "task-2" → Lightpanda
+                                        └── Session "task-3" → Chromium (full fidelity)
 ```
 
 ## Why
@@ -121,31 +121,31 @@ ab-remote my-task screenshot
 ab-remote --stop my-task
 ```
 
-### Lightpanda (fast mode)
+### Chrome (full fidelity mode)
 
-Use `--engine lightpanda` for 10x faster, 10x lighter browser sessions:
+Use `--engine chrome` when you need screenshots, extensions, or persistent profiles:
 
 ```bash
-# Create a Lightpanda session
-ab-remote --create fast-task --engine lightpanda
-ab-remote fast-task navigate url=https://example.com
-ab-remote fast-task snapshot
+# Create a Chrome session
+ab-remote --create chrome-task --engine chrome
+ab-remote chrome-task navigate url=https://example.com
+ab-remote chrome-task snapshot
 
-# Or set engine on first command (auto-creates with Lightpanda)
-ab-remote fast-task navigate url=https://example.com --engine lightpanda
+# Or set engine on first command (auto-creates with Chrome)
+ab-remote chrome-task navigate url=https://example.com --engine chrome
 
-# Chrome is the default — no flag needed
+# Lightpanda is the default — no flag needed
 ab-remote my-task navigate url=https://example.com
 ```
 
-| | Chrome (default) | Lightpanda |
+| | Lightpanda (default) | Chrome |
 |---|---|---|
-| **Memory** | ~100-300MB/session | ~10-30MB/session |
-| **Speed** | Baseline | ~10x faster |
-| **Screenshots** | Yes | Depends on CDP support |
-| **Extensions** | Yes | No |
-| **Persistent profiles** | Yes | No |
-| **Best for** | Full fidelity, testing | Scraping, AI agents, CI/CD |
+| **Memory** | ~10-30MB/session | ~100-300MB/session |
+| **Speed** | ~10x faster | Baseline |
+| **Screenshots** | Depends on CDP support | Yes |
+| **Extensions** | No | Yes |
+| **Persistent profiles** | No | Yes |
+| **Best for** | Scraping, AI agents, CI/CD | Full fidelity, testing |
 
 ## CLI Reference (ab-remote)
 

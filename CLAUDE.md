@@ -6,14 +6,14 @@ Remote, multi-session browser automation over HTTP. One Docker container on a re
 
 ```
 Local machine ──HTTP──> SSH tunnel ──> Docker container (remote server)
-                                        ├── Session "task-1" → Chromium (default)
-                                        ├── Session "task-2" → Chromium
-                                        └── Session "task-3" → Lightpanda (10x faster)
+                                        ├── Session "task-1" → Lightpanda (default)
+                                        ├── Session "task-2" → Lightpanda
+                                        └── Session "task-3" → Chromium (full fidelity)
 ```
 
 - API server: Hono (Node.js), port 3000, Bearer token auth
 - Each session: isolated daemon process + browser instance (Chrome or Lightpanda) + Unix socket
-- Engine selection: per-session via `engine` field (default: `chrome`)
+- Engine selection: per-session via `engine` field (default: `lightpanda`)
 - IPC: JSON-over-newline protocol on Unix sockets
 - State: persisted to `/data/sessions/` in container, optional AES-256-GCM encryption
 
@@ -81,13 +81,13 @@ ab-remote --health                      # check service status
 
 # Sessions auto-create on first command — you don't need --create
 
-# Use Lightpanda (10x faster, 10x less memory, headless only)
-ab-remote --create fast-task --engine lightpanda
-ab-remote fast-task navigate url=https://example.com
-ab-remote fast-task snapshot
+# Use Chrome (full fidelity, screenshots, extensions)
+ab-remote --create chrome-task --engine chrome
+ab-remote chrome-task navigate url=https://example.com
+ab-remote chrome-task snapshot
 
-# Or set engine on first command (auto-creates with that engine)
-ab-remote fast-task navigate url=https://example.com --engine lightpanda
+# Or set engine on first command (auto-creates with Chrome)
+ab-remote chrome-task navigate url=https://example.com --engine chrome
 ```
 
 ### Using Raw HTTP API (curl)
@@ -125,7 +125,7 @@ curl -X POST "$URL/sessions/task-1/command" \
 6. **One command at a time** — commands within a session are serialized; don't fire in parallel
 7. **Use meaningful session names** — `research-flights`, `check-prices`, not `session-1`
 8. **Clean up when done** — `ab-remote --stop <session>` frees server memory
-9. **Use Lightpanda for speed** — `--engine lightpanda` is 10x faster and uses 10x less memory, great for scraping and data extraction. Use Chrome (default) when you need full fidelity, screenshots, extensions, or persistent profiles
+9. **Lightpanda is the default** — fast and lightweight, great for scraping and data extraction. Use `--engine chrome` when you need full fidelity, screenshots, extensions, or persistent profiles
 
 ### Available Actions
 

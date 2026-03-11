@@ -15,7 +15,7 @@ const app = new Hono();
 const startTime = Date.now();
 
 function parseEngine(raw: unknown): Engine {
-  return raw === "lightpanda" ? "lightpanda" : "chrome";
+  return raw === "chrome" ? "chrome" : "lightpanda";
 }
 
 // Auth middleware (skips /health)
