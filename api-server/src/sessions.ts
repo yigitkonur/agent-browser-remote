@@ -110,8 +110,8 @@ export async function ensureSession(id: string): Promise<void> {
     );
   }
 
-  // Ensure socket dir exists
-  fs.mkdirSync(SOCKET_DIR, { recursive: true });
+  // Ensure socket dir exists with owner-only permissions
+  fs.mkdirSync(SOCKET_DIR, { recursive: true, mode: 0o700 });
 
   const child = spawn("node", [DAEMON_PATH], {
     env: {

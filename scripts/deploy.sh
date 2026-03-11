@@ -23,6 +23,7 @@ MODE="${DEPLOY_MODE:-pull}"
 HOST_PORT="${DEPLOY_PORT:-3000}"
 LOCAL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 IMAGE="ghcr.io/yigitkonur/agent-browser-remote:latest"
+LOCAL_TAG="agent-browser-remote:local-build"
 
 # ---------- Helpers ----------
 info()  { printf '\033[1;34m[%s]\033[0m %s\n' "$(date +%H:%M:%S)" "$*"; }
@@ -43,30 +44,39 @@ echo ""
 
 # ---------- Step 1: Build TypeScript ----------
 if [ "$MODE" = "build" ]; then
-  info "[1/4] Building API server TypeScript..."
+  info "[1/5] Building API server TypeScript..."
   (cd "$LOCAL_DIR/api-server" && npm ci && npm run build)
 else
-  info "[1/4] Skipping local build (pull mode)"
+  info "[1/3] Skipping local build (pull mode)"
 fi
 
 # ---------- Step 2: Get image to server ----------
 if [ "$MODE" = "build" ]; then
-  info "[2/4] Building Docker image for linux/amd64..."
+  info "[2/5] Building Docker image for linux/amd64..."
   docker buildx build \
     --platform linux/amd64 \
-    --tag "$IMAGE" \
+    --tag "$LOCAL_TAG" \
     --load \
     "$LOCAL_DIR"
 
-  info "[2/4] Transferring image to server..."
-  docker save "$IMAGE" | gzip | ssh "$SERVER" "gunzip | sudo docker load"
+  info "[3/5] Transferring image to server..."
+  docker save "$LOCAL_TAG" | gzip | ssh "$SERVER" "gunzip | sudo docker load"
+  # Re-tag on server so compose can find it
+  ssh "$SERVER" "sudo docker tag $LOCAL_TAG $IMAGE"
 else
-  info "[2/4] Pulling image on server from GHCR..."
+  info "[2/3] Pulling image on server from GHCR..."
   ssh "$SERVER" "sudo docker pull $IMAGE"
 fi
 
 # ---------- Step 3: Sync configuration ----------
-info "[3/4] Syncing configuration..."
+STEP_SYNC="3/3"
+STEP_START="3/3"
+if [ "$MODE" = "build" ]; then
+  STEP_SYNC="4/5"
+  STEP_START="5/5"
+fi
+
+info "[$STEP_SYNC] Syncing configuration..."
 ssh "$SERVER" "sudo mkdir -p $REMOTE_DIR && sudo chown \$(whoami) $REMOTE_DIR"
 
 # Generate docker-compose.yml with the correct port on the fly
@@ -88,8 +98,6 @@ services:
       NODE_ENV: production
     volumes:
       - ab_data:/data
-    tmpfs:
-      - /dev/shm:size=2g,mode=1777
     shm_size: "2gb"
     deploy:
       resources:
@@ -114,7 +122,7 @@ rm -f /tmp/agent-browser-compose.yml
 ssh "$SERVER" "test -f $REMOTE_DIR/.env || { TOKEN=\$(openssl rand -hex 32); printf 'API_TOKEN=%s\nMAX_SESSIONS=10\nSTATE_EXPIRE_DAYS=30\n' \"\$TOKEN\" > $REMOTE_DIR/.env; echo \"Generated new API token: \$TOKEN\"; }"
 
 # ---------- Step 4: Start service ----------
-info "[4/4] Starting service..."
+info "[$STEP_START] Starting service..."
 ssh "$SERVER" "cd $REMOTE_DIR && sudo docker compose up -d --pull never"
 
 ok ""

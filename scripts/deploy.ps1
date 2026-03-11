@@ -21,6 +21,7 @@ $RemoteDir = if ($env:DEPLOY_DIR)  { $env:DEPLOY_DIR }  else { "/opt/agent-brows
 $Mode      = if ($env:DEPLOY_MODE) { $env:DEPLOY_MODE } else { "pull" }
 $HostPort  = if ($env:DEPLOY_PORT) { $env:DEPLOY_PORT } else { "3000" }
 $Image     = "ghcr.io/yigitkonur/agent-browser-remote:latest"
+$LocalTag  = "agent-browser-remote:local-build"
 
 if (-not $Server) {
     Write-Error "DEPLOY_SERVER is not set. Example: `$env:DEPLOY_SERVER = 'user@your-server'"
@@ -47,29 +48,39 @@ Write-Host ""
 
 # ---------- Step 1: Build TypeScript ----------
 if ($Mode -eq "build") {
-    Info "[1/4] Building API server TypeScript..."
+    Info "[1/5] Building API server TypeScript..."
     Push-Location "$PSScriptRoot\..\api-server"
     npm ci
     npm run build
     Pop-Location
 } else {
-    Info "[1/4] Skipping local build (pull mode)"
+    Info "[1/3] Skipping local build (pull mode)"
 }
 
 # ---------- Step 2: Get image to server ----------
 if ($Mode -eq "build") {
-    Info "[2/4] Building Docker image for linux/amd64..."
-    docker buildx build --platform linux/amd64 --tag $Image --load "$PSScriptRoot\.."
+    Info "[2/5] Building Docker image for linux/amd64..."
+    docker buildx build --platform linux/amd64 --tag $LocalTag --load "$PSScriptRoot\.."
 
-    Info "[2/4] Transferring image to server..."
-    docker save $Image | ssh $Server "sudo docker load"
+    Info "[3/5] Transferring image to server..."
+    # Use gzip for faster transfer (requires gzip on Windows PATH or WSL)
+    if (Get-Command gzip -ErrorAction SilentlyContinue) {
+        docker save $LocalTag | gzip | ssh $Server "gunzip | sudo docker load"
+    } else {
+        docker save $LocalTag | ssh $Server "sudo docker load"
+    }
+    # Re-tag on server so compose can find it
+    ssh $Server "sudo docker tag $LocalTag $Image"
 } else {
-    Info "[2/4] Pulling image on server from GHCR..."
+    Info "[2/3] Pulling image on server from GHCR..."
     ssh $Server "sudo docker pull $Image"
 }
 
 # ---------- Step 3: Sync configuration ----------
-Info "[3/4] Syncing configuration..."
+$StepSync  = if ($Mode -eq "build") { "4/5" } else { "3/3" }
+$StepStart = if ($Mode -eq "build") { "5/5" } else { "3/3" }
+
+Info "[$StepSync] Syncing configuration..."
 ssh $Server "sudo mkdir -p $RemoteDir && sudo chown `$(whoami) $RemoteDir"
 
 # Generate compose file locally then SCP
@@ -91,8 +102,6 @@ services:
       NODE_ENV: production
     volumes:
       - ab_data:/data
-    tmpfs:
-      - /dev/shm:size=2g,mode=1777
     shm_size: "2gb"
     deploy:
       resources:
@@ -119,7 +128,7 @@ Remove-Item $TmpFile -ErrorAction SilentlyContinue
 ssh $Server "test -f $RemoteDir/.env || { TOKEN=`$(openssl rand -hex 32); printf 'API_TOKEN=%s\nMAX_SESSIONS=10\nSTATE_EXPIRE_DAYS=30\n' `"`$TOKEN`" > $RemoteDir/.env; echo `"Generated new API token: `$TOKEN`"; }"
 
 # ---------- Step 4: Start service ----------
-Info "[4/4] Starting service..."
+Info "[$StepStart] Starting service..."
 ssh $Server "cd $RemoteDir && sudo docker compose up -d --pull never"
 
 Ok ""

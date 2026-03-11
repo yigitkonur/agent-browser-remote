@@ -82,8 +82,6 @@ services:
       NODE_ENV: production
     volumes:
       - ab_data:/data
-    tmpfs:
-      - /dev/shm:size=2g,mode=1777
     shm_size: "2gb"
     deploy:
       resources:

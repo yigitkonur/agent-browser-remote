@@ -69,9 +69,9 @@ cd agent-browser-remote
 # Build the API server
 cd api-server && npm install && npm run build && cd ..
 
-# Build and run
+# Build and run (use both compose files so the local build is used)
 docker compose -f docker-compose.yml -f docker-compose.build.yml build
-docker compose up -d
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d
 ```
 
 ## Connect from your local machine
@@ -143,10 +143,12 @@ curl -X POST http://localhost:3000/sessions \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"session": "scraper-1"}'
+# → {"session":"scraper-1","status":"ready"}
 
 # Stop a session (closes browser, saves state)
 curl -X DELETE http://localhost:3000/sessions/my-task \
   -H "Authorization: Bearer $TOKEN"
+# → {"session":"my-task","status":"stopped"}
 ```
 
 ### CLI wrapper (ab-remote)
@@ -166,19 +168,29 @@ ab-remote my-task snapshot
 ab-remote my-task click selector=@e2
 ab-remote my-task fill selector=@e5 value="hello world"
 ab-remote --sessions
+ab-remote --create scraper-1
 ab-remote --stop my-task
 ab-remote --health
+ab-remote --version
 ```
 
 **Windows (PowerShell):**
 
 ```powershell
+# Set token (or add to your PowerShell profile)
 $env:AGENT_BROWSER_REMOTE_TOKEN = "your-token-here"
 
+# Add scripts to PATH (optional)
+$env:PATH += ";C:\path\to\agent-browser-remote\scripts"
+
+# Use it
 .\scripts\ab-remote.ps1 my-task navigate url=https://example.com
 .\scripts\ab-remote.ps1 my-task snapshot
+.\scripts\ab-remote.ps1 my-task click selector=@e2
 .\scripts\ab-remote.ps1 --sessions
+.\scripts\ab-remote.ps1 --create scraper-1
 .\scripts\ab-remote.ps1 --stop my-task
+.\scripts\ab-remote.ps1 --health
 ```
 
 ### All supported actions
