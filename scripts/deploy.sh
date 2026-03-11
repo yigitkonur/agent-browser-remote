@@ -1,57 +1,127 @@
 #!/usr/bin/env bash
-# Deploy agent-browser-remote to the remote server.
-# Usage: ./scripts/deploy.sh
+# =============================================================================
+# deploy.sh — Deploy agent-browser-remote to a remote server
+#
+# Usage:
+#   DEPLOY_SERVER=user@host ./scripts/deploy.sh          # deploy via GHCR pull
+#   DEPLOY_SERVER=user@host DEPLOY_MODE=build ./scripts/deploy.sh  # build + transfer
+#
+# Environment:
+#   DEPLOY_SERVER  (required)  SSH target, e.g. user@your-server
+#   DEPLOY_DIR     (optional)  Remote install dir (default: /opt/agent-browser)
+#   DEPLOY_MODE    (optional)  "pull" (default) or "build"
+#     pull  — docker pull from ghcr.io (fast, ~30s)
+#     build — local docker build + docker save/load transfer (~5min)
+#   DEPLOY_PORT    (optional)  Host port to bind (default: 3000)
+# =============================================================================
 set -euo pipefail
 
-SERVER="${DEPLOY_SERVER:?Set DEPLOY_SERVER env var (e.g. DEPLOY_SERVER=user@your-server)}"
+# ---------- Config ----------
+SERVER="${DEPLOY_SERVER:?Error: set DEPLOY_SERVER, e.g. DEPLOY_SERVER=user@your-server}"
 REMOTE_DIR="${DEPLOY_DIR:-/opt/agent-browser}"
+MODE="${DEPLOY_MODE:-pull}"
+HOST_PORT="${DEPLOY_PORT:-3000}"
 LOCAL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+IMAGE="ghcr.io/yigitkonur/agent-browser-remote:latest"
 
-echo "=== agent-browser-remote deploy ==="
-echo "Server:     $SERVER"
-echo "Remote dir: $REMOTE_DIR"
+# ---------- Helpers ----------
+info()  { printf '\033[1;34m[%s]\033[0m %s\n' "$(date +%H:%M:%S)" "$*"; }
+ok()    { printf '\033[1;32m[%s]\033[0m %s\n' "$(date +%H:%M:%S)" "$*"; }
+err()   { printf '\033[1;31m[%s]\033[0m %s\n' "$(date +%H:%M:%S)" "$*" >&2; }
+die()   { err "$@"; exit 1; }
+
+# ---------- Preflight checks ----------
+command -v ssh  >/dev/null 2>&1 || die "ssh not found"
+command -v docker >/dev/null 2>&1 || die "docker not found"
+
+info "=== agent-browser-remote deploy ==="
+info "Server:  $SERVER"
+info "Dir:     $REMOTE_DIR"
+info "Mode:    $MODE"
+info "Port:    $HOST_PORT"
 echo ""
 
-# 1. Build API server TypeScript
-echo "[1/5] Building API server..."
-cd "$LOCAL_DIR/api-server"
-npm run build
-cd "$LOCAL_DIR"
+# ---------- Step 1: Build TypeScript ----------
+if [ "$MODE" = "build" ]; then
+  info "[1/4] Building API server TypeScript..."
+  (cd "$LOCAL_DIR/api-server" && npm ci && npm run build)
+else
+  info "[1/4] Skipping local build (pull mode)"
+fi
 
-# 2. Build Docker image for linux/amd64 (cross-build from Apple Silicon)
-echo "[2/5] Building Docker image for linux/amd64..."
-docker buildx build \
-  --platform linux/amd64 \
-  --tag agent-browser-api:latest \
-  --load \
-  "$LOCAL_DIR"
+# ---------- Step 2: Get image to server ----------
+if [ "$MODE" = "build" ]; then
+  info "[2/4] Building Docker image for linux/amd64..."
+  docker buildx build \
+    --platform linux/amd64 \
+    --tag "$IMAGE" \
+    --load \
+    "$LOCAL_DIR"
 
-# 3. Export and transfer image to server
-echo "[3/5] Transferring image to server (~800MB compressed)..."
-docker save agent-browser-api:latest | gzip | \
-  ssh "$SERVER" "gunzip | sudo docker load"
+  info "[2/4] Transferring image to server..."
+  docker save "$IMAGE" | gzip | ssh "$SERVER" "gunzip | sudo docker load"
+else
+  info "[2/4] Pulling image on server from GHCR..."
+  ssh "$SERVER" "sudo docker pull $IMAGE"
+fi
 
-# 4. Ensure remote directory and sync config files
-echo "[4/5] Syncing configuration..."
+# ---------- Step 3: Sync configuration ----------
+info "[3/4] Syncing configuration..."
 ssh "$SERVER" "sudo mkdir -p $REMOTE_DIR && sudo chown \$(whoami) $REMOTE_DIR"
-rsync -avz \
-  "$LOCAL_DIR/docker-compose.yml" \
-  "$SERVER:$REMOTE_DIR/"
 
-# Copy .env if it doesn't exist on remote (don't overwrite existing)
-ssh "$SERVER" "test -f $REMOTE_DIR/.env || echo 'API_TOKEN=' > $REMOTE_DIR/.env"
-echo "  [!] Edit $REMOTE_DIR/.env on the server to set API_TOKEN"
+# Generate docker-compose.yml with the correct port on the fly
+cat > /tmp/agent-browser-compose.yml <<COMPOSE
+services:
+  agent-browser:
+    image: $IMAGE
+    container_name: agent-browser
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${HOST_PORT}:3000"
+    environment:
+      API_TOKEN: \${API_TOKEN}
+      AGENT_BROWSER_ENCRYPTION_KEY: \${AGENT_BROWSER_ENCRYPTION_KEY:-}
+      AGENT_BROWSER_SOCKET_DIR: /data/sockets
+      AGENT_BROWSER_ARGS: "--no-sandbox,--disable-dev-shm-usage,--disable-setuid-sandbox,--disable-gpu"
+      AGENT_BROWSER_STATE_EXPIRE_DAYS: \${STATE_EXPIRE_DAYS:-30}
+      MAX_SESSIONS: \${MAX_SESSIONS:-10}
+      NODE_ENV: production
+    volumes:
+      - ab_data:/data
+    tmpfs:
+      - /dev/shm:size=2g,mode=1777
+    shm_size: "2gb"
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: "2.0"
+        reservations:
+          memory: 512M
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
 
-# 5. Restart service
-echo "[5/5] Starting service..."
-ssh "$SERVER" "cd $REMOTE_DIR && sudo docker compose up -d --no-build"
+volumes:
+  ab_data:
+COMPOSE
 
-echo ""
-echo "=== Done ==="
-echo "Service running at $SERVER (port 3000, localhost-bound)"
-echo ""
-echo "Connect via SSH tunnel:"
-echo "  ssh -N -L 3000:localhost:3000 $SERVER"
-echo ""
-echo "Then test:"
-echo "  curl http://localhost:3000/health"
+scp /tmp/agent-browser-compose.yml "$SERVER:$REMOTE_DIR/docker-compose.yml"
+rm -f /tmp/agent-browser-compose.yml
+
+# Create .env if it doesn't exist on remote
+ssh "$SERVER" "test -f $REMOTE_DIR/.env || { TOKEN=\$(openssl rand -hex 32); printf 'API_TOKEN=%s\nMAX_SESSIONS=10\nSTATE_EXPIRE_DAYS=30\n' \"\$TOKEN\" > $REMOTE_DIR/.env; echo \"Generated new API token: \$TOKEN\"; }"
+
+# ---------- Step 4: Start service ----------
+info "[4/4] Starting service..."
+ssh "$SERVER" "cd $REMOTE_DIR && sudo docker compose up -d --pull never"
+
+ok ""
+ok "=== Deploy complete ==="
+ok "Service running on $SERVER (port $HOST_PORT, localhost-bound)"
+ok ""
+ok "Next steps:"
+ok "  1. Note the API token: ssh $SERVER 'cat $REMOTE_DIR/.env'"
+ok "  2. Open SSH tunnel:    ssh -N -L ${HOST_PORT}:localhost:${HOST_PORT} $SERVER"
+ok "  3. Test:               curl http://localhost:${HOST_PORT}/health"

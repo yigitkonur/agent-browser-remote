@@ -1,5 +1,10 @@
 FROM node:24-slim
 
+# OCI image metadata
+LABEL org.opencontainers.image.source="https://github.com/yigitkonur/agent-browser-remote"
+LABEL org.opencontainers.image.description="Multi-session agent-browser Docker service with HTTP API"
+LABEL org.opencontainers.image.licenses="MIT"
+
 # System dependencies for Chromium
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libnss3 libnspr4 libdbus-1-3 libatk1.0-0 libatk-bridge2.0-0 \

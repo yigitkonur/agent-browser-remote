@@ -3,10 +3,10 @@
 Run [agent-browser](https://github.com/vercel-labs/agent-browser) as a remote, multi-session Docker service. One container, multiple isolated browser sessions, accessible via a simple HTTP API.
 
 ```
-Local machine ──HTTP──▶ SSH tunnel ──▶ Docker container
-                                         ├── Session "task-1" → Chromium
-                                         ├── Session "task-2" → Chromium
-                                         └── Session "task-3" → Chromium
+Local machine ──HTTP──> SSH tunnel ──> Docker container
+                                        ├── Session "task-1" → Chromium
+                                        ├── Session "task-2" → Chromium
+                                        └── Session "task-3" → Chromium
 ```
 
 ## Why
@@ -15,74 +15,85 @@ Local machine ──HTTP──▶ SSH tunnel ──▶ Docker container
 - **Multiple isolated sessions** — each session gets its own browser instance with separate cookies, state, and refs
 - **AI-agent friendly** — same compact snapshot/ref workflow as local agent-browser, over HTTP
 - **Secure** — Bearer token auth, localhost-only binding, access via SSH tunnel
+- **Easy install** — one command to set up, pre-built images on GitHub Container Registry
 
 ## Quick Start
 
-### 1. Clone and build
+### Option A: One-command server setup
+
+SSH into your server and run:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/yigitkonur/agent-browser-remote/main/scripts/setup.sh | bash
+```
+
+Or with custom options:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/yigitkonur/agent-browser-remote/main/scripts/setup.sh | \
+  INSTALL_DIR=/opt/agent-browser PORT=3000 bash
+```
+
+The script will pull the image, generate an API token, and start the service.
+
+### Option B: Manual setup
+
+```bash
+# 1. Create a directory
+mkdir -p /opt/agent-browser && cd /opt/agent-browser
+
+# 2. Download docker-compose.yml
+curl -fsSLO https://raw.githubusercontent.com/yigitkonur/agent-browser-remote/main/docker-compose.yml
+
+# 3. Create .env
+cat > .env <<EOF
+API_TOKEN=$(openssl rand -hex 32)
+MAX_SESSIONS=10
+STATE_EXPIRE_DAYS=30
+EOF
+
+# 4. Pull and start
+docker compose up -d
+
+# 5. Verify
+curl http://localhost:3000/health
+# → {"status":"ok","sessions":0,"uptime":5}
+```
+
+### Option C: Build from source
 
 ```bash
 git clone https://github.com/yigitkonur/agent-browser-remote.git
 cd agent-browser-remote
 
-# Install API server dependencies and build
+# Build the API server
 cd api-server && npm install && npm run build && cd ..
 
-# Build Docker image
-docker compose build
-```
-
-### 2. Configure
-
-```bash
-# Generate an API token
-openssl rand -hex 32
-
-# Create .env file
-cp .env.example .env
-# Edit .env and paste your token
-```
-
-### 3. Run locally
-
-```bash
+# Build and run
+docker compose -f docker-compose.yml -f docker-compose.build.yml build
 docker compose up -d
-
-# Test
-curl http://localhost:3000/health
-# → {"status":"ok","sessions":0,"uptime":5}
 ```
 
-### 4. Deploy to a remote server
+## Connect from your local machine
 
-Edit `scripts/deploy.sh` and set your server address, then:
+The service binds to `127.0.0.1` only — it's not exposed to the internet. Access it via SSH tunnel:
 
 ```bash
-./scripts/deploy.sh
+ssh -N -L 3000:localhost:3000 user@your-server
 ```
 
-Or deploy manually:
+Now `http://localhost:3000` on your machine routes to the remote service.
 
-```bash
-# Build for linux/amd64 (if your local machine is ARM)
-docker buildx build --platform linux/amd64 --tag agent-browser-api:latest --load .
+**Tip:** Add to `~/.ssh/config` for convenience:
 
-# Transfer image
-docker save agent-browser-api:latest | gzip | ssh user@server "gunzip | sudo docker load"
-
-# Copy files
-scp docker-compose.yml .env user@server:/opt/agent-browser/
-
-# Start
-ssh user@server "cd /opt/agent-browser && sudo docker compose up -d"
+```
+Host agent-browser
+    HostName your-server-ip
+    User your-user
+    LocalForward 3000 localhost:3000
 ```
 
-### 5. Connect via SSH tunnel
-
-```bash
-ssh -N -L 3000:localhost:3000 user@server
-```
-
-Now `http://localhost:3000` routes to your remote agent-browser.
+Then just `ssh -N agent-browser`.
 
 ## Usage
 
@@ -138,12 +149,44 @@ curl -X DELETE http://localhost:3000/sessions/my-task \
   -H "Authorization: Bearer $TOKEN"
 ```
 
+### CLI wrapper (ab-remote)
+
+For a shell-friendly experience, use the included `ab-remote` script:
+
+**macOS / Linux:**
+
+```bash
+# Add to your shell profile (~/.zshrc or ~/.bashrc)
+export AGENT_BROWSER_REMOTE_TOKEN="your-token-here"
+export PATH="/path/to/agent-browser-remote/scripts:$PATH"
+
+# Use it
+ab-remote my-task navigate url=https://example.com
+ab-remote my-task snapshot
+ab-remote my-task click selector=@e2
+ab-remote my-task fill selector=@e5 value="hello world"
+ab-remote --sessions
+ab-remote --stop my-task
+ab-remote --health
+```
+
+**Windows (PowerShell):**
+
+```powershell
+$env:AGENT_BROWSER_REMOTE_TOKEN = "your-token-here"
+
+.\scripts\ab-remote.ps1 my-task navigate url=https://example.com
+.\scripts\ab-remote.ps1 my-task snapshot
+.\scripts\ab-remote.ps1 --sessions
+.\scripts\ab-remote.ps1 --stop my-task
+```
+
 ### All supported actions
 
 Every [agent-browser command](https://github.com/vercel-labs/agent-browser) works as an action:
 
 | Category | Actions |
-|----------|---------|
+|-------------|---------|
 | **Navigation** | `navigate`, `back`, `forward`, `reload`, `url`, `title` |
 | **Interaction** | `click`, `fill`, `type`, `press`, `hover`, `select`, `check`, `uncheck`, `scroll`, `focus`, `clear`, `upload`, `drag`, `dblclick` |
 | **Observation** | `snapshot`, `screenshot`, `eval`, `gettext`, `getattribute`, `isvisible`, `isenabled`, `ischecked`, `count` |
@@ -171,8 +214,6 @@ Every [agent-browser command](https://github.com/vercel-labs/agent-browser) work
   "url": "https://example.com"
 }
 ```
-
-The API wraps this into agent-browser's internal protocol, sends it to the session daemon, and returns the response.
 
 ### Response format
 
@@ -222,6 +263,20 @@ Each session runs its own `agent-browser` daemon process with a dedicated Chromi
 
 The API server communicates with daemons via Unix sockets using agent-browser's native JSON-over-newline protocol. Daemons are spawned on-demand when the first command arrives for a session.
 
+## Docker Image
+
+Pre-built images are available on GitHub Container Registry for both `linux/amd64` and `linux/arm64`:
+
+```bash
+docker pull ghcr.io/yigitkonur/agent-browser-remote:latest
+```
+
+Tagged releases are also available:
+
+```bash
+docker pull ghcr.io/yigitkonur/agent-browser-remote:1.0.0
+```
+
 ## Configuration
 
 ### Environment variables
@@ -232,6 +287,16 @@ The API server communicates with daemons via Unix sockets using agent-browser's 
 | `MAX_SESSIONS` | `10` | Maximum concurrent browser sessions |
 | `STATE_EXPIRE_DAYS` | `30` | Auto-delete session state older than N days |
 | `AGENT_BROWSER_ENCRYPTION_KEY` | (optional) | AES-256-GCM key for encrypting session state |
+
+### Resource guidelines
+
+Each Chromium instance uses ~100-300MB RAM. Plan your `MAX_SESSIONS` and container memory accordingly:
+
+| Sessions | Recommended memory | CPU |
+|----------|-------------------|-----|
+| 1-5      | 2GB               | 1   |
+| 5-10     | 4GB               | 2   |
+| 10-20    | 8GB               | 4   |
 
 ### Docker Compose settings
 
@@ -244,49 +309,31 @@ The default `docker-compose.yml` includes:
 - **Persistent volume**: `ab_data` for session state across restarts
 - **Security**: `no-new-privileges`, all capabilities dropped
 
-Adjust resource limits based on your expected session count. Each Chromium instance uses ~100-300MB.
+## Deploying to a Remote Server
 
-### Deploy script configuration
+### From your local machine
 
-Edit `scripts/deploy.sh` or override via environment:
-
-```bash
-DEPLOY_SERVER=user@your-server DEPLOY_DIR=/opt/agent-browser ./scripts/deploy.sh
-```
-
-## Connecting agent-browser CLI to the Remote Server
-
-You can also point your **local** `agent-browser` CLI at the remote Chromium instances via CDP. This gives you the full CLI experience while the browser runs remotely.
-
-### Option 1: Use the HTTP API directly
-
-This is the primary method. All commands go through the REST API as shown above.
-
-### Option 2: SSH + remote CLI execution
-
-Run agent-browser commands directly on the server:
+**macOS / Linux:**
 
 ```bash
-ssh user@server "docker exec agent-browser node -e \"
-  const net = require('net');
-  const sock = net.createConnection('/data/sockets/my-session.sock');
-  sock.write(JSON.stringify({id:'1',action:'snapshot'}) + '\n');
-  sock.on('data', d => { process.stdout.write(d); sock.destroy(); });
-\""
+DEPLOY_SERVER=user@your-server ./scripts/deploy.sh
 ```
 
-### Option 3: Configure as a system-wide remote browser
+**Windows (PowerShell):**
 
-Add to your shell profile (`~/.zshrc` or `~/.bashrc`):
-
-```bash
-# Remote agent-browser via SSH tunnel
-# Start tunnel: ssh -N -L 3000:localhost:3000 user@server
-export AGENT_BROWSER_REMOTE_URL="http://localhost:3000"
-export AGENT_BROWSER_REMOTE_TOKEN="your-token"
+```powershell
+$env:DEPLOY_SERVER = "user@your-server"
+.\scripts\deploy.ps1
 ```
 
-Then use a wrapper script (see `scripts/ab-remote` in this repo).
+The deploy script will pull the image on the server (or build and transfer if `DEPLOY_MODE=build`), sync configuration, and start the service.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DEPLOY_SERVER` | (required) | SSH target, e.g. `user@your-server` |
+| `DEPLOY_DIR` | `/opt/agent-browser` | Remote install directory |
+| `DEPLOY_MODE` | `pull` | `pull` (from GHCR) or `build` (local build + transfer) |
+| `DEPLOY_PORT` | `3000` | Host port to bind on the remote server |
 
 ## Security
 
@@ -303,7 +350,11 @@ Then use a wrapper script (see `scripts/ab-remote` in this repo).
 ## Requirements
 
 - Docker 24+ with Compose v2
-- Node.js 20+ (for building the API server)
+- SSH client (for tunnel access)
+- curl (for CLI usage)
+
+**For building from source:**
+- Node.js 20+
 - `docker buildx` (for cross-platform builds from Apple Silicon)
 
 ## License

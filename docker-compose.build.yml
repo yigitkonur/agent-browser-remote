@@ -1,0 +1,4 @@
+services:
+  agent-browser:
+    build: .
+    image: agent-browser-remote:local

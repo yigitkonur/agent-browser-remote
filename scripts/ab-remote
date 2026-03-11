@@ -1,97 +1,172 @@
 #!/usr/bin/env bash
-# ab-remote — CLI wrapper for agent-browser-remote HTTP API.
+# =============================================================================
+# ab-remote — CLI wrapper for agent-browser-remote HTTP API
+#
+# Works on macOS, Linux, and WSL. No dependencies beyond curl.
+#
 # Usage:
 #   ab-remote <session> <action> [key=value ...]
-#
-# Examples:
-#   ab-remote my-task navigate url=https://example.com
-#   ab-remote my-task snapshot
-#   ab-remote my-task click selector=@e2
-#   ab-remote my-task fill selector=@e5 value="search query"
-#   ab-remote --sessions              # list sessions
-#   ab-remote --stop my-task          # stop a session
-#   ab-remote --health                # health check
+#   ab-remote --sessions | --stop <id> | --health | --help
 #
 # Environment:
-#   AGENT_BROWSER_REMOTE_URL   (default: http://localhost:3000)
-#   AGENT_BROWSER_REMOTE_TOKEN (required)
-
+#   AGENT_BROWSER_REMOTE_URL    (default: http://localhost:3000)
+#   AGENT_BROWSER_REMOTE_TOKEN  (required)
+# =============================================================================
 set -euo pipefail
 
-URL="${AGENT_BROWSER_REMOTE_URL:-http://localhost:3000}"
-TOKEN="${AGENT_BROWSER_REMOTE_TOKEN:-}"
+# ---------- Config ----------
+readonly URL="${AGENT_BROWSER_REMOTE_URL:-http://localhost:3000}"
+readonly TOKEN="${AGENT_BROWSER_REMOTE_TOKEN:-}"
+readonly VERSION="1.0.0"
 
-if [ -z "$TOKEN" ]; then
-  echo "Error: AGENT_BROWSER_REMOTE_TOKEN is not set" >&2
-  echo "  export AGENT_BROWSER_REMOTE_TOKEN=\$(cat /path/to/.env | grep API_TOKEN | cut -d= -f2)" >&2
-  exit 1
-fi
+# ---------- Helpers ----------
+die() { printf '\033[1;31mError:\033[0m %s\n' "$*" >&2; exit 1; }
 
-AUTH="Authorization: Bearer $TOKEN"
+pretty_json() {
+  if command -v jq >/dev/null 2>&1; then
+    jq .
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -m json.tool
+  elif command -v python >/dev/null 2>&1; then
+    python -m json.tool
+  else
+    cat
+  fi
+}
 
-# Special flags
+require_token() {
+  [ -n "$TOKEN" ] || die "AGENT_BROWSER_REMOTE_TOKEN is not set.
+  export AGENT_BROWSER_REMOTE_TOKEN=\"your-token-here\""
+}
+
+require_curl() {
+  command -v curl >/dev/null 2>&1 || die "curl is required but not found in PATH"
+}
+
+# ---------- Commands ----------
+cmd_help() {
+  cat <<'HELP'
+ab-remote — CLI for agent-browser-remote
+
+Usage:
+  ab-remote <session> <action> [key=value ...]
+
+Examples:
+  ab-remote task-1 navigate url=https://example.com
+  ab-remote task-1 snapshot
+  ab-remote task-1 click selector=@e2
+  ab-remote task-1 fill selector=@e5 value="hello world"
+  ab-remote task-1 screenshot
+
+Session management:
+  ab-remote --sessions              List active sessions
+  ab-remote --create <name>         Create a session explicitly
+  ab-remote --stop <name>           Stop and close a session
+
+Other:
+  ab-remote --health                Health check (no auth required)
+  ab-remote --version               Show version
+  ab-remote --help                  Show this help
+
+Environment variables:
+  AGENT_BROWSER_REMOTE_URL          Default: http://localhost:3000
+  AGENT_BROWSER_REMOTE_TOKEN        Required for all commands except --health
+HELP
+}
+
+cmd_health() {
+  require_curl
+  curl -sS --fail-with-body --max-time 10 "$URL/health" | pretty_json
+}
+
+cmd_sessions() {
+  require_curl
+  require_token
+  curl -sS --fail-with-body --max-time 10 \
+    -H "Authorization: Bearer $TOKEN" \
+    "$URL/sessions" | pretty_json
+}
+
+cmd_create() {
+  local name="${1:?Usage: ab-remote --create <session-name>}"
+  require_curl
+  require_token
+  curl -sS --fail-with-body --max-time 30 \
+    -X POST \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"session\":\"$name\"}" \
+    "$URL/sessions" | pretty_json
+}
+
+cmd_stop() {
+  local name="${1:?Usage: ab-remote --stop <session-name>}"
+  require_curl
+  require_token
+  curl -sS --fail-with-body --max-time 30 \
+    -X DELETE \
+    -H "Authorization: Bearer $TOKEN" \
+    "$URL/sessions/$name" | pretty_json
+}
+
+cmd_command() {
+  local session="$1"
+  local action="$2"
+  shift 2
+
+  require_curl
+  require_token
+
+  # Validate session name
+  if ! printf '%s' "$session" | grep -qE '^[a-zA-Z0-9_-]+$'; then
+    die "Invalid session name: '$session'. Use only letters, numbers, hyphens, underscores."
+  fi
+
+  # Build JSON from key=value pairs
+  local json="{\"action\":\"$action\""
+  for arg in "$@"; do
+    local key="${arg%%=*}"
+    local val="${arg#*=}"
+
+    # Validate key=value format
+    if [ "$key" = "$arg" ]; then
+      die "Invalid argument: '$arg'. Use key=value format."
+    fi
+
+    # Detect types: number, boolean, or string
+    if printf '%s' "$val" | grep -qE '^-?[0-9]+(\.[0-9]+)?$'; then
+      json="$json,\"$key\":$val"
+    elif [ "$val" = "true" ] || [ "$val" = "false" ]; then
+      json="$json,\"$key\":$val"
+    else
+      # Escape backslashes and double quotes for JSON safety
+      val=$(printf '%s' "$val" | sed 's/\\/\\\\/g; s/"/\\"/g')
+      json="$json,\"$key\":\"$val\""
+    fi
+  done
+  json="$json}"
+
+  curl -sS --fail-with-body --max-time 60 \
+    -X POST \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "$json" \
+    "$URL/sessions/$session/command" | pretty_json
+}
+
+# ---------- Dispatch ----------
 case "${1:-}" in
-  --health)
-    curl -s "$URL/health" | python3 -m json.tool 2>/dev/null || curl -s "$URL/health"
-    exit 0
-    ;;
-  --sessions)
-    curl -s -H "$AUTH" "$URL/sessions" | python3 -m json.tool 2>/dev/null || curl -s -H "$AUTH" "$URL/sessions"
-    exit 0
-    ;;
-  --stop)
-    SESSION="${2:?Usage: ab-remote --stop <session>}"
-    curl -s -X DELETE -H "$AUTH" "$URL/sessions/$SESSION" | python3 -m json.tool 2>/dev/null || true
-    exit 0
-    ;;
-  --help|-h|"")
-    echo "Usage: ab-remote <session> <action> [key=value ...]"
-    echo ""
-    echo "Commands:"
-    echo "  ab-remote <session> navigate url=https://example.com"
-    echo "  ab-remote <session> snapshot"
-    echo "  ab-remote <session> click selector=@e2"
-    echo "  ab-remote <session> fill selector=@e5 value=\"search query\""
-    echo ""
-    echo "Management:"
-    echo "  ab-remote --sessions          List active sessions"
-    echo "  ab-remote --stop <session>    Stop a session"
-    echo "  ab-remote --health            Health check"
-    echo ""
-    echo "Environment:"
-    echo "  AGENT_BROWSER_REMOTE_URL      Default: http://localhost:3000"
-    echo "  AGENT_BROWSER_REMOTE_TOKEN    Required. Your API bearer token."
-    exit 0
+  --help|-h)     cmd_help ;;
+  --version|-v)  echo "ab-remote $VERSION" ;;
+  --health)      cmd_health ;;
+  --sessions)    cmd_sessions ;;
+  --create)      shift; cmd_create "$@" ;;
+  --stop)        shift; cmd_stop "$@" ;;
+  "")            cmd_help; exit 1 ;;
+  -*)            die "Unknown flag: $1. Run 'ab-remote --help' for usage." ;;
+  *)
+    # <session> <action> [key=value ...]
+    [ $# -ge 2 ] || die "Usage: ab-remote <session> <action> [key=value ...]"
+    cmd_command "$@"
     ;;
 esac
-
-SESSION="$1"
-ACTION="${2:?Usage: ab-remote <session> <action> [key=value ...]}"
-shift 2
-
-# Build JSON payload from key=value pairs
-JSON="{\"action\":\"$ACTION\""
-for arg in "$@"; do
-  KEY="${arg%%=*}"
-  VAL="${arg#*=}"
-  # Try to detect numbers and booleans; otherwise quote as string
-  if [[ "$VAL" =~ ^[0-9]+$ ]]; then
-    JSON="$JSON,\"$KEY\":$VAL"
-  elif [[ "$VAL" == "true" || "$VAL" == "false" ]]; then
-    JSON="$JSON,\"$KEY\":$VAL"
-  else
-    # Escape double quotes in value
-    VAL="${VAL//\"/\\\"}"
-    JSON="$JSON,\"$KEY\":\"$VAL\""
-  fi
-done
-JSON="$JSON}"
-
-# Execute command
-RESPONSE=$(curl -s -X POST "$URL/sessions/$SESSION/command" \
-  -H "$AUTH" \
-  -H "Content-Type: application/json" \
-  -d "$JSON")
-
-# Pretty-print if python3 is available
-echo "$RESPONSE" | python3 -m json.tool 2>/dev/null || echo "$RESPONSE"

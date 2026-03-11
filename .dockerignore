@@ -2,8 +2,10 @@ node_modules
 api-server/src
 api-server/node_modules
 .git
+.github
 *.md
 .env
 .env.*
 !.env.example
 scripts
+.DS_Store
