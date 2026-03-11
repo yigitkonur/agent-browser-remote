@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# ab-remote — CLI wrapper for agent-browser-remote HTTP API.
+# Usage:
+#   ab-remote <session> <action> [key=value ...]
+#
+# Examples:
+#   ab-remote my-task navigate url=https://example.com
+#   ab-remote my-task snapshot
+#   ab-remote my-task click selector=@e2
+#   ab-remote my-task fill selector=@e5 value="search query"
+#   ab-remote --sessions              # list sessions
+#   ab-remote --stop my-task          # stop a session
+#   ab-remote --health                # health check
+#
+# Environment:
+#   AGENT_BROWSER_REMOTE_URL   (default: http://localhost:3000)
+#   AGENT_BROWSER_REMOTE_TOKEN (required)
+
+set -euo pipefail
+
+URL="${AGENT_BROWSER_REMOTE_URL:-http://localhost:3000}"
+TOKEN="${AGENT_BROWSER_REMOTE_TOKEN:-}"
+
+if [ -z "$TOKEN" ]; then
+  echo "Error: AGENT_BROWSER_REMOTE_TOKEN is not set" >&2
+  echo "  export AGENT_BROWSER_REMOTE_TOKEN=\$(cat /path/to/.env | grep API_TOKEN | cut -d= -f2)" >&2
+  exit 1
+fi
+
+AUTH="Authorization: Bearer $TOKEN"
+
+# Special flags
+case "${1:-}" in
+  --health)
+    curl -s "$URL/health" | python3 -m json.tool 2>/dev/null || curl -s "$URL/health"
+    exit 0
+    ;;
+  --sessions)
+    curl -s -H "$AUTH" "$URL/sessions" | python3 -m json.tool 2>/dev/null || curl -s -H "$AUTH" "$URL/sessions"
+    exit 0
+    ;;
+  --stop)
+    SESSION="${2:?Usage: ab-remote --stop <session>}"
+    curl -s -X DELETE -H "$AUTH" "$URL/sessions/$SESSION" | python3 -m json.tool 2>/dev/null || true
+    exit 0
+    ;;
+  --help|-h|"")
+    echo "Usage: ab-remote <session> <action> [key=value ...]"
+    echo ""
+    echo "Commands:"
+    echo "  ab-remote <session> navigate url=https://example.com"
+    echo "  ab-remote <session> snapshot"
+    echo "  ab-remote <session> click selector=@e2"
+    echo "  ab-remote <session> fill selector=@e5 value=\"search query\""
+    echo ""
+    echo "Management:"
+    echo "  ab-remote --sessions          List active sessions"
+    echo "  ab-remote --stop <session>    Stop a session"
+    echo "  ab-remote --health            Health check"
+    echo ""
+    echo "Environment:"
+    echo "  AGENT_BROWSER_REMOTE_URL      Default: http://localhost:3000"
+    echo "  AGENT_BROWSER_REMOTE_TOKEN    Required. Your API bearer token."
+    exit 0
+    ;;
+esac
+
+SESSION="$1"
+ACTION="${2:?Usage: ab-remote <session> <action> [key=value ...]}"
+shift 2
+
+# Build JSON payload from key=value pairs
+JSON="{\"action\":\"$ACTION\""
+for arg in "$@"; do
+  KEY="${arg%%=*}"
+  VAL="${arg#*=}"
+  # Try to detect numbers and booleans; otherwise quote as string
+  if [[ "$VAL" =~ ^[0-9]+$ ]]; then
+    JSON="$JSON,\"$KEY\":$VAL"
+  elif [[ "$VAL" == "true" || "$VAL" == "false" ]]; then
+    JSON="$JSON,\"$KEY\":$VAL"
+  else
+    # Escape double quotes in value
+    VAL="${VAL//\"/\\\"}"
+    JSON="$JSON,\"$KEY\":\"$VAL\""
+  fi
+done
+JSON="$JSON}"
+
+# Execute command
+RESPONSE=$(curl -s -X POST "$URL/sessions/$SESSION/command" \
+  -H "$AUTH" \
+  -H "Content-Type: application/json" \
+  -d "$JSON")
+
+# Pretty-print if python3 is available
+echo "$RESPONSE" | python3 -m json.tool 2>/dev/null || echo "$RESPONSE"

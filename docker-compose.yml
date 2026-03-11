@@ -1,0 +1,35 @@
+services:
+  agent-browser:
+    build: .
+    image: agent-browser-api:latest
+    container_name: agent-browser
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:4100:3000"
+    environment:
+      API_TOKEN: ${API_TOKEN}
+      AGENT_BROWSER_ENCRYPTION_KEY: ${AGENT_BROWSER_ENCRYPTION_KEY:-}
+      AGENT_BROWSER_SOCKET_DIR: /data/sockets
+      AGENT_BROWSER_ARGS: "--no-sandbox,--disable-dev-shm-usage,--disable-setuid-sandbox,--disable-gpu"
+      AGENT_BROWSER_STATE_EXPIRE_DAYS: ${STATE_EXPIRE_DAYS:-30}
+      MAX_SESSIONS: ${MAX_SESSIONS:-10}
+      NODE_ENV: production
+    volumes:
+      - ab_data:/data
+    tmpfs:
+      - /dev/shm:size=2g,mode=1777
+    shm_size: "2gb"
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: "2.0"
+        reservations:
+          memory: 512M
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  ab_data:

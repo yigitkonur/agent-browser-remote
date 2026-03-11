@@ -1,0 +1,9 @@
+node_modules
+api-server/src
+api-server/node_modules
+.git
+*.md
+.env
+.env.*
+!.env.example
+scripts
