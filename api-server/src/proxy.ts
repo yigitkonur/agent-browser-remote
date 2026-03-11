@@ -1,9 +1,12 @@
 import net from "node:net";
 import path from "node:path";
 import crypto from "node:crypto";
+import fs from "node:fs";
+import type { Engine } from "./sessions.js";
+import { sendLpCommand } from "./lightpanda.js";
 
 const SOCKET_DIR = process.env.AGENT_BROWSER_SOCKET_DIR ?? "/data/sockets";
-const COMMAND_TIMEOUT = 30_000; // 30s — Playwright default is 25s
+const COMMAND_TIMEOUT = 30_000;
 
 interface DaemonResponse {
   id: string;
@@ -13,10 +16,23 @@ interface DaemonResponse {
 }
 
 /**
- * Send a command to a session's daemon via Unix socket.
+ * Get the engine for a session by reading the .engine sidecar file.
+ */
+function getSessionEngine(sessionId: string): Engine {
+  try {
+    const e = fs
+      .readFileSync(path.join(SOCKET_DIR, `${sessionId}.engine`), "utf8")
+      .trim();
+    if (e === "lightpanda") return "lightpanda";
+  } catch {}
+  return "chrome";
+}
+
+/**
+ * Send a command to a Chrome session's daemon via Unix socket.
  * The daemon speaks newline-delimited JSON.
  */
-export function sendCommand(
+function sendSocketCommand(
   sessionId: string,
   command: Record<string, unknown>
 ): Promise<DaemonResponse> {
@@ -60,7 +76,9 @@ export function sendCommand(
           const resp = JSON.parse(line) as DaemonResponse;
           resolve(resp);
         } catch (err) {
-          reject(new Error(`Invalid JSON from daemon: ${line.slice(0, 200)}`));
+          reject(
+            new Error(`Invalid JSON from daemon: ${line.slice(0, 200)}`)
+          );
         }
       });
     });
@@ -73,4 +91,22 @@ export function sendCommand(
       settle(() => reject(new Error("Socket closed before response")));
     });
   });
+}
+
+/**
+ * Send a command to a session, routing to the appropriate backend:
+ * - Chrome: Unix socket IPC with daemon.js
+ * - Lightpanda: Playwright CDP connection via lightpanda.ts
+ */
+export function sendCommand(
+  sessionId: string,
+  command: Record<string, unknown>
+): Promise<DaemonResponse> {
+  const engine = getSessionEngine(sessionId);
+
+  if (engine === "lightpanda") {
+    return sendLpCommand(sessionId, command);
+  }
+
+  return sendSocketCommand(sessionId, command);
 }

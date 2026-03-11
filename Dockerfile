@@ -21,10 +21,24 @@ RUN npm install -g agent-browser@0.17.1
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
 RUN npx playwright install --with-deps chromium
 
+# Native agent-browser binary (for Lightpanda / native mode)
+RUN chmod +x /usr/local/lib/node_modules/agent-browser/bin/agent-browser-linux-* 2>/dev/null || true
+
+# Lightpanda browser binary (headless, Zig-based, ~10x faster/lighter than Chrome)
+# Auto-detect architecture for multi-platform builds
+RUN ARCH=$(uname -m) && \
+    if [ "$ARCH" = "x86_64" ]; then LP_ARCH="x86_64"; \
+    elif [ "$ARCH" = "aarch64" ]; then LP_ARCH="aarch64"; \
+    else LP_ARCH="x86_64"; fi && \
+    curl -fsSL \
+      "https://github.com/lightpanda-io/browser/releases/download/nightly/lightpanda-${LP_ARCH}-linux" \
+      -o /usr/local/bin/lightpanda \
+    && chmod +x /usr/local/bin/lightpanda
+
 # Create non-root user and data directories
 RUN groupadd -r ab && useradd -r -g ab -m ab \
     && mkdir -p /data/sockets /data/sessions \
-    && chown -R ab:ab /data /opt/playwright-browsers
+    && chown -R ab:ab /data /opt/playwright-browsers /usr/local/bin/lightpanda
 
 # Copy and install the API server (pre-built)
 WORKDIR /app

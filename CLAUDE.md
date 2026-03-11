@@ -1,18 +1,19 @@
 # agent-browser-remote
 
-Remote, multi-session browser automation over HTTP. One Docker container on a remote server, multiple isolated Chromium sessions, accessible via `ab-remote` CLI or raw HTTP API.
+Remote, multi-session browser automation over HTTP. One Docker container on a remote server, multiple isolated browser sessions (Chrome or Lightpanda), accessible via `ab-remote` CLI or raw HTTP API.
 
 ## Architecture
 
 ```
 Local machine ──HTTP──> SSH tunnel ──> Docker container (remote server)
-                                        ├── Session "task-1" → Chromium
+                                        ├── Session "task-1" → Chromium (default)
                                         ├── Session "task-2" → Chromium
-                                        └── Session "task-3" → Chromium
+                                        └── Session "task-3" → Lightpanda (10x faster)
 ```
 
 - API server: Hono (Node.js), port 3000, Bearer token auth
-- Each session: isolated daemon process + Chromium instance + Unix socket
+- Each session: isolated daemon process + browser instance (Chrome or Lightpanda) + Unix socket
+- Engine selection: per-session via `engine` field (default: `chrome`)
 - IPC: JSON-over-newline protocol on Unix sockets
 - State: persisted to `/data/sessions/` in container, optional AES-256-GCM encryption
 
@@ -79,6 +80,14 @@ ab-remote --stop my-task                # close session + browser
 ab-remote --health                      # check service status
 
 # Sessions auto-create on first command — you don't need --create
+
+# Use Lightpanda (10x faster, 10x less memory, headless only)
+ab-remote --create fast-task --engine lightpanda
+ab-remote fast-task navigate url=https://example.com
+ab-remote fast-task snapshot
+
+# Or set engine on first command (auto-creates with that engine)
+ab-remote fast-task navigate url=https://example.com --engine lightpanda
 ```
 
 ### Using Raw HTTP API (curl)
@@ -116,6 +125,7 @@ curl -X POST "$URL/sessions/task-1/command" \
 6. **One command at a time** — commands within a session are serialized; don't fire in parallel
 7. **Use meaningful session names** — `research-flights`, `check-prices`, not `session-1`
 8. **Clean up when done** — `ab-remote --stop <session>` frees server memory
+9. **Use Lightpanda for speed** — `--engine lightpanda` is 10x faster and uses 10x less memory, great for scraping and data extraction. Use Chrome (default) when you need full fidelity, screenshots, extensions, or persistent profiles
 
 ### Available Actions
 
@@ -165,7 +175,7 @@ DEPLOY_SERVER=ubuntu@195.154.103.43 DEPLOY_MODE=build ./scripts/deploy.sh
 | `api-server/src/sessions.ts` | Session lifecycle (spawn/stop daemons) |
 | `api-server/src/proxy.ts` | Unix socket IPC with daemon processes |
 | `api-server/src/auth.ts` | Bearer token middleware (timing-safe) |
-| `Dockerfile` | Container image (node:24-slim + Chromium + tini) |
+| `Dockerfile` | Container image (node:24-slim + Chromium + Lightpanda + tini) |
 | `scripts/setup.sh` | One-command server setup |
 | `scripts/client-setup.sh` | One-command client setup |
 | `scripts/ab-remote` | CLI wrapper (Bash) |

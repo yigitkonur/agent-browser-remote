@@ -98,6 +98,7 @@ services:
       AGENT_BROWSER_ARGS: "--no-sandbox,--disable-dev-shm-usage,--disable-setuid-sandbox,--disable-gpu"
       AGENT_BROWSER_STATE_EXPIRE_DAYS: \${STATE_EXPIRE_DAYS:-30}
       MAX_SESSIONS: \${MAX_SESSIONS:-10}
+      LIGHTPANDA_PATH: \${LIGHTPANDA_PATH:-/usr/local/bin/lightpanda}
       NODE_ENV: production
     volumes:
       - ab_data:/data

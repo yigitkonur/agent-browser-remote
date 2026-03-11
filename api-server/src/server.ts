@@ -7,11 +7,16 @@ import {
   listSessions,
   isValidSessionName,
   stopAll,
+  type Engine,
 } from "./sessions.js";
 import { sendCommand } from "./proxy.js";
 
 const app = new Hono();
 const startTime = Date.now();
+
+function parseEngine(raw: unknown): Engine {
+  return raw === "lightpanda" ? "lightpanda" : "chrome";
+}
 
 // Auth middleware (skips /health)
 app.use("*", authMiddleware);
@@ -35,8 +40,10 @@ app.get("/sessions", (c) => {
 app.post("/sessions", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as {
     session?: string;
+    engine?: string;
   };
   const id = body.session ?? "default";
+  const engine = parseEngine(body.engine);
 
   if (!isValidSessionName(id)) {
     return c.json(
@@ -46,8 +53,8 @@ app.post("/sessions", async (c) => {
   }
 
   try {
-    await ensureSession(id);
-    return c.json({ session: id, status: "ready" }, 201);
+    await ensureSession(id, engine);
+    return c.json({ session: id, status: "ready", engine }, 201);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return c.json({ error: msg }, 503);
@@ -98,16 +105,22 @@ app.post("/sessions/:id/command", async (c) => {
     );
   }
 
+  // Engine hint — only used when auto-creating a new session
+  const engine = parseEngine(body.engine);
+
   try {
-    // Auto-start daemon if needed
-    await ensureSession(id);
+    // Auto-start daemon if needed (engine hint only applies to new sessions)
+    await ensureSession(id, engine);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return c.json({ error: `Failed to start session: ${msg}` }, 503);
   }
 
+  // Strip engine from the command payload before forwarding to daemon
+  const { engine: _strip, ...command } = body;
+
   try {
-    const resp = await sendCommand(id, body);
+    const resp = await sendCommand(id, command);
     if (resp.success) {
       return c.json({ success: true, data: resp.data });
     } else {

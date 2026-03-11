@@ -5,7 +5,7 @@
 # Works on macOS, Linux, and WSL. No dependencies beyond curl.
 #
 # Usage:
-#   ab-remote <session> <action> [key=value ...]
+#   ab-remote <session> <action> [key=value ...] [--engine chrome|lightpanda]
 #   ab-remote --sessions | --stop <id> | --health | --status | --help
 #
 # Environment:
@@ -17,7 +17,7 @@ set -euo pipefail
 # ---------- Config ----------
 readonly URL="${AGENT_BROWSER_REMOTE_URL:-http://localhost:3000}"
 readonly TOKEN="${AGENT_BROWSER_REMOTE_TOKEN:-}"
-readonly VERSION="1.1.0"
+readonly VERSION="1.2.0"
 
 # ---------- Helpers ----------
 die() { printf '\033[1;31mError:\033[0m %s\n' "$*" >&2; exit 1; }
@@ -58,13 +58,21 @@ check_connection() {
   fi
 }
 
+validate_engine() {
+  local engine="$1"
+  case "$engine" in
+    chrome|lightpanda) ;;
+    *) die "Invalid engine: '$engine'. Use 'chrome' or 'lightpanda'." ;;
+  esac
+}
+
 # ---------- Commands ----------
 cmd_help() {
   cat <<'HELP'
 ab-remote — CLI for agent-browser-remote
 
 Usage:
-  ab-remote <session> <action> [key=value ...]
+  ab-remote <session> <action> [key=value ...] [--engine chrome|lightpanda]
 
 Examples:
   ab-remote task-1 navigate url=https://example.com
@@ -74,10 +82,14 @@ Examples:
   ab-remote task-1 screenshot
   ab-remote task-1 eval expression="document.title"
 
+  # Use Lightpanda (faster, lighter) instead of Chrome:
+  ab-remote task-1 navigate url=https://example.com --engine lightpanda
+
 Session management:
-  ab-remote --sessions              List active sessions
-  ab-remote --create <name>         Create a session explicitly
-  ab-remote --stop <name>           Stop and close a session
+  ab-remote --sessions                          List active sessions
+  ab-remote --create <name>                     Create a Chrome session
+  ab-remote --create <name> --engine lightpanda Create a Lightpanda session
+  ab-remote --stop <name>                       Stop and close a session
 
 Connection:
   ab-remote --health                Health check (no auth required)
@@ -87,6 +99,13 @@ Connection:
 Other:
   ab-remote --version               Show version
   ab-remote --help                  Show this help
+
+Engine selection:
+  --engine chrome       Use Chromium via Playwright (default, full fidelity)
+  --engine lightpanda   Use Lightpanda (10x faster, 10x less memory, headless only)
+
+  Engine is set when a session is first created. Subsequent commands to an
+  existing session use whatever engine it was created with.
 
 Environment variables:
   AGENT_BROWSER_REMOTE_URL          Default: http://localhost:3000
@@ -216,7 +235,21 @@ cmd_sessions() {
 }
 
 cmd_create() {
-  local name="${1:?Usage: ab-remote --create <session-name>}"
+  local name="${1:?Usage: ab-remote --create <session-name> [--engine chrome|lightpanda]}"
+  shift
+
+  local engine="chrome"
+
+  # Parse optional --engine
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --engine) engine="$2"; shift 2 ;;
+      *) die "Unknown option: $1. Usage: ab-remote --create <name> [--engine chrome|lightpanda]" ;;
+    esac
+  done
+
+  validate_engine "$engine"
+
   require_curl
   require_token
   check_connection
@@ -224,7 +257,7 @@ cmd_create() {
     -X POST \
     -H "Authorization: Bearer $TOKEN" \
     -H "Content-Type: application/json" \
-    -d "{\"session\":\"$name\"}" \
+    -d "{\"session\":\"$name\",\"engine\":\"$engine\"}" \
     "$URL/sessions" | pretty_json
 }
 
@@ -252,9 +285,29 @@ cmd_command() {
     die "Invalid session name: '$session'. Use only letters, numbers, hyphens, underscores."
   fi
 
+  # Separate --engine flag from key=value args
+  local engine=""
+  local args=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --engine) engine="$2"; shift 2 ;;
+      *) args+=("$1"); shift ;;
+    esac
+  done
+
+  if [ -n "$engine" ]; then
+    validate_engine "$engine"
+  fi
+
   # Build JSON from key=value pairs
   local json="{\"action\":\"$action\""
-  for arg in "$@"; do
+
+  # Include engine if specified (only matters for auto-creating new sessions)
+  if [ -n "$engine" ]; then
+    json="$json,\"engine\":\"$engine\""
+  fi
+
+  for arg in "${args[@]+"${args[@]}"}"; do
     local key="${arg%%=*}"
     local val="${arg#*=}"
 
@@ -298,7 +351,7 @@ case "${1:-}" in
   "")            cmd_help; exit 1 ;;
   -*)            die "Unknown flag: $1. Run 'ab-remote --help' for usage." ;;
   *)
-    # <session> <action> [key=value ...]
+    # <session> <action> [key=value ...] [--engine ...]
     [ $# -ge 2 ] || die "Usage: ab-remote <session> <action> [key=value ...]
 Example: ab-remote my-task navigate url=https://example.com"
     cmd_command "$@"

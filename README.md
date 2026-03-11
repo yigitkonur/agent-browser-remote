@@ -1,17 +1,18 @@
 # agent-browser-remote
 
-Run [agent-browser](https://github.com/vercel-labs/agent-browser) as a remote, multi-session Docker service. One container, multiple isolated browser sessions, accessible via a simple HTTP API.
+Run [agent-browser](https://github.com/vercel-labs/agent-browser) as a remote, multi-session Docker service. One container, multiple isolated browser sessions, accessible via a simple HTTP API. Supports both **Chrome** (full fidelity) and **[Lightpanda](https://lightpanda.io/)** (10x faster, 10x less memory).
 
 ```
 Local machine ──HTTP──> SSH tunnel ──> Docker container
-                                        ├── Session "task-1" → Chromium
+                                        ├── Session "task-1" → Chromium (default)
                                         ├── Session "task-2" → Chromium
-                                        └── Session "task-3" → Chromium
+                                        └── Session "task-3" → Lightpanda (fast)
 ```
 
 ## Why
 
-- **Offload browsers from your machine** — run Chromium on a remote server
+- **Offload browsers from your machine** — run Chromium or Lightpanda on a remote server
+- **Two engines, one container** — Chrome for full fidelity, Lightpanda for speed (~10x faster, ~10x less RAM)
 - **Multiple isolated sessions** — each session gets its own browser instance with separate cookies, state, and refs
 - **AI-agent friendly** — same compact snapshot/ref workflow as local agent-browser, over HTTP
 - **Secure** — Bearer token auth, localhost-only binding, access via SSH tunnel
@@ -119,6 +120,32 @@ ab-remote my-task screenshot
 # Clean up
 ab-remote --stop my-task
 ```
+
+### Lightpanda (fast mode)
+
+Use `--engine lightpanda` for 10x faster, 10x lighter browser sessions:
+
+```bash
+# Create a Lightpanda session
+ab-remote --create fast-task --engine lightpanda
+ab-remote fast-task navigate url=https://example.com
+ab-remote fast-task snapshot
+
+# Or set engine on first command (auto-creates with Lightpanda)
+ab-remote fast-task navigate url=https://example.com --engine lightpanda
+
+# Chrome is the default — no flag needed
+ab-remote my-task navigate url=https://example.com
+```
+
+| | Chrome (default) | Lightpanda |
+|---|---|---|
+| **Memory** | ~100-300MB/session | ~10-30MB/session |
+| **Speed** | Baseline | ~10x faster |
+| **Screenshots** | Yes | Depends on CDP support |
+| **Extensions** | Yes | No |
+| **Persistent profiles** | Yes | No |
+| **Best for** | Full fidelity, testing | Scraping, AI agents, CI/CD |
 
 ## CLI Reference (ab-remote)
 
