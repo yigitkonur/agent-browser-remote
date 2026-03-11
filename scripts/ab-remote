@@ -6,7 +6,7 @@
 #
 # Usage:
 #   ab-remote <session> <action> [key=value ...]
-#   ab-remote --sessions | --stop <id> | --health | --help
+#   ab-remote --sessions | --stop <id> | --health | --status | --help
 #
 # Environment:
 #   AGENT_BROWSER_REMOTE_URL    (default: http://localhost:3000)
@@ -17,10 +17,11 @@ set -euo pipefail
 # ---------- Config ----------
 readonly URL="${AGENT_BROWSER_REMOTE_URL:-http://localhost:3000}"
 readonly TOKEN="${AGENT_BROWSER_REMOTE_TOKEN:-}"
-readonly VERSION="1.0.0"
+readonly VERSION="1.1.0"
 
 # ---------- Helpers ----------
 die() { printf '\033[1;31mError:\033[0m %s\n' "$*" >&2; exit 1; }
+warn() { printf '\033[1;33mWarning:\033[0m %s\n' "$*" >&2; }
 
 pretty_json() {
   if command -v jq >/dev/null 2>&1; then
@@ -36,11 +37,25 @@ pretty_json() {
 
 require_token() {
   [ -n "$TOKEN" ] || die "AGENT_BROWSER_REMOTE_TOKEN is not set.
-  export AGENT_BROWSER_REMOTE_TOKEN=\"your-token-here\""
+
+Fix: Add to your shell profile (~/.zshrc or ~/.bashrc):
+  export AGENT_BROWSER_REMOTE_TOKEN=\"your-token-here\"
+
+Or run the client setup script:
+  ./scripts/client-setup.sh user@your-server"
 }
 
 require_curl() {
   command -v curl >/dev/null 2>&1 || die "curl is required but not found in PATH"
+}
+
+# Check if URL is reachable (quick pre-flight)
+check_connection() {
+  if ! curl -s --max-time 3 "$URL/health" >/dev/null 2>&1; then
+    warn "Cannot reach $URL — is your SSH tunnel running?
+  Start it with: ssh -f -N -L <port>:localhost:3000 user@your-server
+  Or run: ab-remote --tunnel user@your-server"
+  fi
 }
 
 # ---------- Commands ----------
@@ -57,14 +72,19 @@ Examples:
   ab-remote task-1 click selector=@e2
   ab-remote task-1 fill selector=@e5 value="hello world"
   ab-remote task-1 screenshot
+  ab-remote task-1 eval expression="document.title"
 
 Session management:
   ab-remote --sessions              List active sessions
   ab-remote --create <name>         Create a session explicitly
   ab-remote --stop <name>           Stop and close a session
 
-Other:
+Connection:
   ab-remote --health                Health check (no auth required)
+  ab-remote --status                Show connection status and config
+  ab-remote --tunnel <user@host>    Start SSH tunnel to remote server
+
+Other:
   ab-remote --version               Show version
   ab-remote --help                  Show this help
 
@@ -79,9 +99,117 @@ cmd_health() {
   curl -sS --fail-with-body --max-time 10 "$URL/health" | pretty_json
 }
 
+cmd_status() {
+  require_curl
+  echo "ab-remote $VERSION"
+  echo ""
+
+  # Config
+  echo "Config:"
+  echo "  URL:   $URL"
+  if [ -n "$TOKEN" ]; then
+    echo "  Token: ${TOKEN:0:8}...${TOKEN: -8}"
+  else
+    echo "  Token: (not set)"
+  fi
+  echo ""
+
+  # Connection
+  echo -n "Service: "
+  local health
+  health=$(curl -s --max-time 5 "$URL/health" 2>/dev/null) || true
+  if [ -n "$health" ]; then
+    local status sessions uptime
+    status=$(echo "$health" | grep -o '"status":"[^"]*"' | cut -d'"' -f4)
+    sessions=$(echo "$health" | grep -o '"sessions":[0-9]*' | cut -d: -f2)
+    uptime=$(echo "$health" | grep -o '"uptime":[0-9]*' | cut -d: -f2)
+    echo "connected ($status, $sessions sessions, uptime ${uptime}s)"
+  else
+    echo "NOT REACHABLE"
+    echo ""
+    echo "  Is your SSH tunnel running?"
+    echo "  Start it: ab-remote --tunnel user@your-server"
+    return 1
+  fi
+
+  # Auth
+  if [ -n "$TOKEN" ]; then
+    echo -n "Auth:    "
+    local auth_check
+    auth_check=$(curl -s --max-time 5 -H "Authorization: Bearer $TOKEN" "$URL/sessions" 2>/dev/null) || true
+    if echo "$auth_check" | grep -q "sessions"; then
+      echo "valid"
+    else
+      echo "INVALID TOKEN"
+    fi
+  fi
+
+  # Tunnel
+  echo -n "Tunnel:  "
+  local port="${URL##*:}"
+  port="${port%%/*}"
+  if pgrep -f "ssh.*-L.*${port}:localhost" >/dev/null 2>&1; then
+    echo "active (PID $(pgrep -f "ssh.*-L.*${port}:localhost" | head -1))"
+  else
+    echo "no active SSH tunnel detected (connection may be direct or via SSH config)"
+  fi
+}
+
+cmd_tunnel() {
+  local server="${1:?Usage: ab-remote --tunnel user@host [--port N]}"
+  shift
+
+  local local_port=""
+  local remote_port="3000"
+
+  # Parse optional --port
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --port) local_port="$2"; shift 2 ;;
+      *) die "Unknown tunnel option: $1" ;;
+    esac
+  done
+
+  # Auto-detect port from URL if not specified
+  if [ -z "$local_port" ]; then
+    local_port="${URL##*:}"
+    local_port="${local_port%%/*}"
+    # Default to 3000 if URL-based detection gives something weird
+    if ! printf '%s' "$local_port" | grep -qE '^[0-9]+$'; then
+      local_port="3000"
+    fi
+  fi
+
+  # Kill existing tunnel to same port
+  if pgrep -f "ssh.*-L.*${local_port}:localhost:${remote_port}" >/dev/null 2>&1; then
+    echo "Stopping existing tunnel on port $local_port..."
+    pkill -f "ssh.*-L.*${local_port}:localhost:${remote_port}" 2>/dev/null || true
+    sleep 1
+  fi
+
+  echo "Starting SSH tunnel: localhost:${local_port} → ${server}:${remote_port}..."
+  ssh -f -N -L "${local_port}:localhost:${remote_port}" "$server" \
+    -o ServerAliveInterval=60 \
+    -o ServerAliveCountMax=3 \
+    -o ExitOnForwardFailure=yes
+
+  sleep 1
+
+  if curl -s --max-time 5 "http://localhost:${local_port}/health" >/dev/null 2>&1; then
+    echo "Tunnel active! Health check passed."
+    echo ""
+    echo "Set environment (if not already in your shell profile):"
+    echo "  export AGENT_BROWSER_REMOTE_URL=\"http://localhost:${local_port}\""
+  else
+    echo "Tunnel started (PID $(pgrep -f "ssh.*-L.*${local_port}:localhost:${remote_port}" | head -1))"
+    echo "Health check failed — the remote service may not be running."
+  fi
+}
+
 cmd_sessions() {
   require_curl
   require_token
+  check_connection
   curl -sS --fail-with-body --max-time 10 \
     -H "Authorization: Bearer $TOKEN" \
     "$URL/sessions" | pretty_json
@@ -91,6 +219,7 @@ cmd_create() {
   local name="${1:?Usage: ab-remote --create <session-name>}"
   require_curl
   require_token
+  check_connection
   curl -sS --fail-with-body --max-time 30 \
     -X POST \
     -H "Authorization: Bearer $TOKEN" \
@@ -103,6 +232,7 @@ cmd_stop() {
   local name="${1:?Usage: ab-remote --stop <session-name>}"
   require_curl
   require_token
+  check_connection
   curl -sS --fail-with-body --max-time 30 \
     -X DELETE \
     -H "Authorization: Bearer $TOKEN" \
@@ -130,7 +260,8 @@ cmd_command() {
 
     # Validate key=value format
     if [ "$key" = "$arg" ]; then
-      die "Invalid argument: '$arg'. Use key=value format."
+      die "Invalid argument: '$arg'. Use key=value format.
+Example: ab-remote $session $action url=https://example.com"
     fi
 
     # Detect types: number, boolean, or string
@@ -159,6 +290,8 @@ case "${1:-}" in
   --help|-h)     cmd_help ;;
   --version|-v)  echo "ab-remote $VERSION" ;;
   --health)      cmd_health ;;
+  --status)      cmd_status ;;
+  --tunnel)      shift; cmd_tunnel "$@" ;;
   --sessions)    cmd_sessions ;;
   --create)      shift; cmd_create "$@" ;;
   --stop)        shift; cmd_stop "$@" ;;
@@ -166,7 +299,8 @@ case "${1:-}" in
   -*)            die "Unknown flag: $1. Run 'ab-remote --help' for usage." ;;
   *)
     # <session> <action> [key=value ...]
-    [ $# -ge 2 ] || die "Usage: ab-remote <session> <action> [key=value ...]"
+    [ $# -ge 2 ] || die "Usage: ab-remote <session> <action> [key=value ...]
+Example: ab-remote my-task navigate url=https://example.com"
     cmd_command "$@"
     ;;
 esac
